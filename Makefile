@@ -1,2 +1,2 @@
 default:
-	clang++ main.cc -o calc -O2
+	clang++ main.cc -o calc -Wall -Wextra -Werror --std=c++17

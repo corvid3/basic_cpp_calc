@@ -1,11 +1,25 @@
 #include <cctype>
+#include <exception>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
-struct Token {
+struct Range {
+    unsigned start, end;
+};
+
+struct CompileContext {
+    std::string src;
+
+    std::string get_from_range(Range const range) const noexcept {
+        return src.substr(range.start, range.end - range.start);
+    }
+};
+
+class Token {
+   public:
     enum class Type {
         Number,
         Plus,
@@ -14,16 +28,22 @@ struct Token {
         Solidus,
         LeftParanthesis,
         RightParanthesis,
+        Equals,
+
+        Identifier,
     };
 
     std::string debug_print() const noexcept {
         std::string out;
 
-        switch (this->type) {
+        switch (m_type) {
             case Type::Number:
-                out += "Number ";
-                out += std::to_string(this->opt_val);
+                out += "Number";
                 break;
+
+            case Type::Identifier:
+                out += "Ident";
+
             case Type::Plus:
                 out += "Plus";
                 break;
@@ -42,19 +62,28 @@ struct Token {
             case Type::RightParanthesis:
                 out += "RightParanthesis";
                 break;
+
+            case Type::Equals:
+                out += "Equals";
+                break;
+
+            default:
+                out += "unimplemented";
         };
 
         return out;
     }
 
-    Type type;
-    double opt_val;
+    Type m_type;
+
+    // a range into the source
+    Range m_range;
 };
 
 std::vector<Token> tokenize(std::string const& input) {
     std::vector<Token> toks{};
 
-    for (int idx = 0; idx < input.length(); idx++) {
+    for (unsigned idx = 0; idx < input.length(); idx++) {
         switch (input[idx]) {
             case ' ':
                 while (input[idx + 1] == ' ')
@@ -62,49 +91,51 @@ std::vector<Token> tokenize(std::string const& input) {
                 break;
 
             case '+':
-                toks.push_back(Token{.type = Token::Type::Plus, .opt_val = 0});
+                toks.push_back(
+                    Token{.m_type = Token::Type::Plus,
+                          .m_range = {.start = idx, .end = idx + 1}});
                 break;
 
             case '-':
-                toks.push_back(Token{.type = Token::Type::Minus, .opt_val = 0});
+                toks.push_back(
+                    Token{.m_type = Token::Type::Minus,
+                          .m_range = {.start = idx, .end = idx + 1}});
                 break;
 
             case '*':
                 toks.push_back(
-                    Token{.type = Token::Type::Asterisk, .opt_val = 0});
+                    Token{.m_type = Token::Type::Asterisk,
+                          .m_range = {.start = idx, .end = idx + 1}});
                 break;
 
             case '/':
                 toks.push_back(
-                    Token{.type = Token::Type::Solidus, .opt_val = 0});
+                    Token{.m_type = Token::Type::Solidus,
+                          .m_range = {.start = idx, .end = idx + 1}});
                 break;
 
             case '(':
                 toks.push_back(
-                    Token{.type = Token::Type::LeftParanthesis, .opt_val = 0});
+                    Token{.m_type = Token::Type::LeftParanthesis,
+                          .m_range = {.start = idx, .end = idx + 1}});
                 break;
 
             case ')':
                 toks.push_back(
-                    Token{.type = Token::Type::RightParanthesis, .opt_val = 0});
+                    Token{.m_type = Token::Type::RightParanthesis,
+                          .m_range = {.start = idx, .end = idx + 1}});
                 break;
 
             default: {
+                unsigned start = idx;
+
                 if (isdigit(input[idx]) or input[idx] == '.') {
-                    std::string temp;
-
                     while (isdigit(input[idx]) or input[idx] == '.')
-                        temp += input[idx++];
+                        idx += 1;
 
-                    try {
-                        double v = std::stod(temp);
-                        toks.push_back(
-                            Token{.type = Token::Type::Number, .opt_val = v});
-                    } catch (std::exception const& e) {
-                        throw std::runtime_error(
-                            "Failure to parse a number.\n");
-                    }
-
+                    toks.push_back(
+                        Token{.m_type = Token::Type::Number,
+                              .m_range = {.start = start, .end = idx}});
                     // dumb hack
                     idx--;
                 } else {
@@ -189,29 +220,41 @@ class BinaryNode : public Node {
 };
 
 class Parser {
-    int m_idx;
-    std::vector<Token> const& m_toks;
+    CompileContext const& m_ctx;
 
-    Parser(std::vector<Token> const& toks) : m_toks(toks), m_idx(0) {}
+    std::vector<Token> const& m_toks;
+    int m_idx;
+
+    Parser(CompileContext const& ctx, std::vector<Token> const& toks)
+        : m_ctx(ctx), m_toks(toks), m_idx(0) {}
 
     std::unique_ptr<Node> parse_fact() {
         auto const& tok = m_toks[m_idx];
         m_idx += 1;
 
-        switch (tok.type) {
-            case Token::Type::Number:
-                return std::make_unique<NumberNode>(NumberNode(tok.opt_val));
+        switch (tok.m_type) {
+            case Token::Type::Number: {
+                std::string str = m_ctx.get_from_range(tok.m_range);
+                try {
+                    return std::make_unique<NumberNode>(
+                        NumberNode(std::stod(str)));
+                } catch (std::exception const& e) {
+                    throw std::runtime_error("invalid number conversion error");
+                }
+            };
 
             case Token::Type::Plus:
             case Token::Type::Minus:
             case Token::Type::Asterisk:
             case Token::Type::Solidus:
             case Token::Type::RightParanthesis:
+            case Token::Type::Equals:
+            case Token::Type::Identifier:
                 throw std::runtime_error("Invalid token in parse stream\n");
 
             case Token::Type::LeftParanthesis:
                 auto ret_val = parse_expr();
-                if (m_toks[m_idx].type != Token::Type::RightParanthesis)
+                if (m_toks[m_idx].m_type != Token::Type::RightParanthesis)
                     throw std::runtime_error("Expected a left-paranthesis\n");
                 return ret_val;
         }
@@ -223,18 +266,19 @@ class Parser {
         for (;;) {
             auto const& op = m_toks[m_idx];
 
-            if (op.type != Token::Type::Asterisk and
-                op.type != Token::Type::Solidus)
+            if (op.m_type != Token::Type::Asterisk and
+                op.m_type != Token::Type::Solidus)
                 break;
 
             m_idx += 1;
 
             auto right = parse_term();
 
-            left = std::make_unique<BinaryNode>(BinaryNode(
-                op.type == Token::Type::Asterisk ? BinaryNode::Action::Multiply
-                                                 : BinaryNode::Action::Divide,
-                std::move(left), std::move(right)));
+            left = std::make_unique<BinaryNode>(
+                BinaryNode(op.m_type == Token::Type::Asterisk
+                               ? BinaryNode::Action::Multiply
+                               : BinaryNode::Action::Divide,
+                           std::move(left), std::move(right)));
         }
 
         return left;
@@ -246,7 +290,8 @@ class Parser {
         for (;;) {
             auto const& op = m_toks[m_idx];
 
-            if (op.type != Token::Type::Plus and op.type != Token::Type::Minus)
+            if (op.m_type != Token::Type::Plus and
+                op.m_type != Token::Type::Minus)
                 break;
 
             m_idx += 1;
@@ -254,8 +299,8 @@ class Parser {
             auto right = parse_fact();
 
             left = std::make_unique<BinaryNode>(BinaryNode(
-                op.type == Token::Type::Plus ? BinaryNode::Action::Add
-                                             : BinaryNode::Action::Subtract,
+                op.m_type == Token::Type::Plus ? BinaryNode::Action::Add
+                                               : BinaryNode::Action::Subtract,
                 std::move(left), std::move(right)));
         }
 
@@ -263,8 +308,9 @@ class Parser {
     }
 
    public:
-    static std::unique_ptr<Node> parse(std::vector<Token> const& toks) {
-        return Parser(toks).parse_expr();
+    static std::unique_ptr<Node> parse(CompileContext const& ctx,
+                                       std::vector<Token> const& toks) {
+        return Parser(ctx, toks).parse_expr();
     }
 };
 
@@ -281,9 +327,12 @@ int main() {
             break;
 
         try {
-            auto const toks = tokenize(input);
+            CompileContext ctx = {
+                .src = input,
+            };
 
-            auto parse = Parser::parse(toks);
+            auto const toks = tokenize(input);
+            auto parse = Parser::parse(ctx, toks);
 
             std::vector<double> stack;
             parse->execute(stack);
