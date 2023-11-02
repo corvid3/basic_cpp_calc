@@ -375,7 +375,7 @@ class Parser {
 
             m_idx += 1;
 
-            auto right = parse_fact();
+            auto right = parse_term();
 
             left = std::make_unique<BinaryNode>(BinaryNode(
                 op.m_type == Token::Type::Plus ? BinaryNode::Action::Add
